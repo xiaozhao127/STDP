@@ -3,7 +3,7 @@
 按参数类型路由预处理方法:载入 → 时间规整 → 清洗 → 类型判别 → 路由降采样 →
 质量评价与工作点选择。详见 docs/DESIGN.md。
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .models import (
     DownsampleSpec,

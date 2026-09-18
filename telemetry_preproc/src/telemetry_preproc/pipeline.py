@@ -36,7 +36,7 @@ from .evaluate.report import write_param_artifacts, write_summary
 from .io.health import check_sampling_health
 from .io.loader import load_series
 from .models import DownsampleSpec, PipelineResult, TelemetrySeries
-from .timeline import estimate_rate, find_segments, mark_gap_flags
+from .timeline import find_segments, mark_gap_flags
 
 STAGES = ("timeline", "cleaning", "classify", "downsample", "evaluate")
 
@@ -61,22 +61,60 @@ class _StageTimer:
             self.stamps[f"{name}_end"] = _utcnow()
 
 
-def run(
+class PreparedSeries:
+    """prepare() 的产物:降采样阶段的全部输入(供预算分配等外部复用,
+    避免复制流水线 ②③④ 阶段逻辑)。字段与 run() 内部语义一致。"""
+
+    def __init__(
+        self,
+        series: TelemetrySeries,
+        segments: list[tuple[int, int]],
+        cres: Any,
+        verdict: Any,
+        noise_sigma: float,
+        ctx: Any,
+        algo: Any,
+        route_meta: dict,
+        spec: DownsampleSpec,
+        evalcfg: dict,
+        timings: dict[str, float],
+        stamps: dict[str, str],
+    ) -> None:
+        self.series = series
+        self.segments = segments
+        self.cres = cres
+        self.verdict = verdict
+        self.noise_sigma = noise_sigma
+        self.ctx = ctx
+        self.algo = algo
+        self.route_meta = route_meta
+        self.spec = spec
+        self.evalcfg = evalcfg
+        self.timings = timings
+        self.stamps = stamps
+
+    @property
+    def n_gaps(self) -> int:
+        return max(0, len(self.segments) - 1)
+
+
+def prepare(
     series: TelemetrySeries,
     config: dict | None = None,
-    input_meta: dict[str, Any] | None = None,
-) -> PipelineResult:
-    """单参数序列全流程。input_meta 携带文件 sha256 等载入期元数据。"""
+    timer: _StageTimer | None = None,
+) -> PreparedSeries:
+    """流水线 ②③④ 阶段:时间轴 → 清洗 → 类型判别 → 路由/上下文构建。
+
+    run() 与端到端预算分配共用;降采样阶段之前的一切决策在此定型。
+    """
     cfg = config or load_config()
-    timer = _StageTimer()
-    timer.stamps["pipeline_start"] = _utcnow()
+    timer = timer or _StageTimer()
 
     # ② 时间轴处理:丢帧/空洞检测与标记(后续所有分桶/算法不得跨 GAP)
     with timer.stage("timeline"):
         segments = find_segments(series.t, float(cfg["timeline"]["gap_factor"]))
         flags = mark_gap_flags(series.flags, segments)
         series1 = TelemetrySeries(series.param_id, series.t, series.y, flags)
-        n_gaps = max(0, len(segments) - 1)
 
     # ③ 清洗:Hampel → 野值/真阶跃持续性检验 → 可选受控插值
     with timer.stage("cleaning"):
@@ -93,12 +131,47 @@ def run(
     noise_aware = verdict.ptype in ("NOISY_SLOW", "UNCERTAIN")
     noise_sigma = (cres.sigma_glob / np.sqrt(2.0)) if noise_aware else 0.0
 
-    # ⑤ 路由降采样(双模式/三模式控制)
+    # ⑤ 路由选择与上下文构建(降采样本体在 run()/外部调用方执行)
     spec = DownsampleSpec.from_config(cfg["downsample"])
     algo, route_meta = select_algorithm(verdict, cfg)
     ctx = DownsampleContext.build(cres.series, segments, cres.f_hat, cres.sigma_glob,
                                   cres.step_events, cfg)
     evalcfg = cfg["evaluate"]
+    return PreparedSeries(
+        series=series, segments=segments, cres=cres, verdict=verdict,
+        noise_sigma=noise_sigma, ctx=ctx, algo=algo, route_meta=route_meta,
+        spec=spec, evalcfg=evalcfg, timings=dict(timer.timings),
+        stamps=dict(timer.stamps),
+    )
+
+
+def run(
+    series: TelemetrySeries,
+    config: dict | None = None,
+    input_meta: dict[str, Any] | None = None,
+    prepared: PreparedSeries | None = None,
+) -> PipelineResult:
+    """单参数序列全流程。input_meta 携带文件 sha256 等载入期元数据。
+
+    prepared:外部已执行的 prepare() 产物(预算分配实验复用 ②③④ 阶段,
+    避免清洗重复计算);缺省时内部自行 prepare。
+    """
+    cfg = config or load_config()
+    timer = _StageTimer()
+    timer.stamps["pipeline_start"] = _utcnow()
+
+    prep = prepared if prepared is not None else prepare(series, cfg, timer)
+    timer.timings.update(prep.timings)
+    timer.stamps.update(prep.stamps)
+    segments = prep.segments
+    cres = prep.cres
+    verdict = prep.verdict
+    noise_sigma = prep.noise_sigma
+    spec = prep.spec
+    algo, route_meta = prep.algo, prep.route_meta
+    ctx = prep.ctx
+    evalcfg = prep.evalcfg
+    n_gaps = prep.n_gaps
     rng = ctx.y_range
     rd_points: list = []
     decision: dict[str, Any] = {}

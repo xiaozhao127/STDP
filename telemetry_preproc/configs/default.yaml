@@ -73,3 +73,32 @@ evaluate:
 report:
   out_dir: out                # 输出根目录:out/<param_id>/{series.parquet,meta.json,report.json,...}
   write_png: true             # 率失真曲线 PNG(matplotlib Agg)
+
+# —— 端到端预测感知压缩(e2e/,设计 §4.6 预留接口的落地)——
+# 阈值语义:仅作用于全局预算分配实验,不改变逐参数判别/评价行为,
+# 故不触发 rule_version 升版;调参请同步更新此处注释。
+e2e_budget:
+  proxy_lags: 32              # 代理 AR 滞后阶数(均匀网格步长数)
+  proxy_horizons: [1, 8, 32, 128, 256]  # 多步长直接预测的步长集(与下游
+                              # TimesFM 多步预测对齐;单步代理会低估极端
+                              # 压缩对远期步长的伤害)
+  ridge_lam_frac: 1.0e-2      # 岭惩罚 = lam_frac × 训练样本数(标准化域)
+  train_frac: 0.75            # 训练/holdout 时间切分(前 75% 训练,后 25% 评估)
+  n_curve_levels: 14          # 每参数"输出点数—预测衰减"曲线档位数(对数均匀)
+  min_points: 4               # 曲线最小输出点数(常值参数固定 2 点,不受此限)
+  importance_blend: 0.5       # 分配目标权重 =(1-b)·均匀 + b·LOO 重要性
+  allocate_method: lagrangian # lagrangian | greedy
+  curve_source: timesfm       # 曲线来源:proxy(AR代理,零GPU) |
+                              # timesfm(部署模型实测,消除代理-部署偏差)
+  n_curve_levels_tm: 8        # timesfm 实测曲线档位数
+  curve_envelope: true        # Pareto 剪枝(删被支配档位,消实测档位间噪声;
+                              # 注意不可用单调包络 —— 会把大档位的低δ记到
+                              # 小档位名下,成本与收益解耦,v3 实测翻车)
+  timesfm:
+    repo_id: google/timesfm-2.5-200m-pytorch
+    context_len: 4096         # 滚动预测上下文(32 的倍数)
+    horizon: 256              # 预测长度(128 的倍数)
+    n_windows: 6              # holdout 内滚动窗口数
+    force_flip_invariance: false  # 奇对称强制(精度↑,解码时间×2)
+    max_batch: 256            # 单次前向序列数上限(显存保护,自动分块)
+

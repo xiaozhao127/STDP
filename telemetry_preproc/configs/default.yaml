@@ -1,0 +1,75 @@
+# 航天遥测数据降采样预处理流水线 — 默认配置
+# 所有阈值/参数外置并版本化(设计文档 §4.4/§6):调阈值必须改 rule_version,
+# 否则历史判别结果不可比。
+
+rule_version: "rules-v2"
+
+io:
+  time_col: t                 # 时间列名(CSV/Parquet 列名或 HDF5 数据集名)
+  value_col: y                # 数值列名
+  raw_convert: null           # 码值→工程量纲线性转换 {a: 1.0, b: 0.0},null 表示已是工程量纲
+  declared_sample_rate_hz: null  # 上游声明的原始采样率;用于"上游已降采样体检"(§4.1)
+  dup_policy: mean            # 重复时间戳合并策略(取均值)
+
+timeline:
+  gap_factor: 3.0             # diff(t) > gap_factor × median(diff(t)) 判为丢帧/空洞
+
+cleaning:
+  hampel_window_s: 0.5        # Hampel 滑窗全宽(秒):W = 2×round(window_s×f̂)+1
+  hampel_k: 4.0               # 判据 |y−median| > k × 1.4826 × MAD(偏保守防误杀瞬态)
+  persist_window_s: 2.0       # 野值/真阶跃持续性检验:检验段后窗口长度(秒)
+  persist_m: null             # 触发持续性检验的最小连续异常点数;null → max(2, round(0.5s×f̂))
+  persist_rho: 3.0            # 后窗口保持在 段内中位数 ± rho×稳健sigma 内 → 判真阶跃
+  interpolate: false          # 被剔除点默认不插值;开启则必须打 INTERPOLATED 标记并计数
+  level_window_s: 0.25        # 电平中值滤波窗(秒),用于阶跃事件主动检测(§4.3)
+  step_min_amp_pct: 2.0       # 阶跃事件最小幅度(%量程),与 persist_rho×sigma 取大者
+
+classify:
+  hf_cutoff_div: 16           # Welch PSD 高低频分界 cutoff = f̂ / hf_cutoff_div
+  constant_eps: 1.0e-6        # |diff(y)| < eps×range 视为无变化(常值比统计)
+  theta_constant: 0.95        # R1: constant_ratio 阈值
+  constant_range_tol: 1.0e-9  # R1 附加条件 range≈0 的绝对容差
+  theta_step: 0.5             # R2: step_density 阈值(次/分钟)
+  theta_fast: 0.5             # R3/R5: hf_ratio 阈值
+  theta_noise: 0.3            # R4: slope_flip_rate 阈值
+  conf_kappa: 0.25            # 置信度: conf = clip(|f−θ|/(θ·κ), 0, 1)
+  conf_margin: 0.1            # |f−θ| < margin×θ → UNCERTAIN 走保守路径
+  composite_trend_window_s: 1.0  # 复合类型鲁棒趋势提取(中值滤波)窗宽(秒),§4.4 规则5/§4.5
+  composite_min_resid_std: 0.05  # 复合判别残差显著性下限(残差std/序列std;画像定标:
+                                 # 缓变类空洞边界伪影 ~1-2%,真复合 ≥15%,取 5% 分界)
+
+downsample:
+  slow_method: lttb           # SLOW 类:lttb | sdt(SDT 输出分段线性特征)
+  step_method: lttb           # STEP 类:lttb | dp(DP 阈值取跳变幅度比例,严禁桶均值)
+  dp_eps_frac: 0.15           # DP eps = frac × 中位跳变幅度
+  paa_prescale: 4             # NOISY_SLOW:PAA 桶数 = prescale × target,降噪后再 LTTB
+  aa_cutoff_rel: 0.45         # FIR 截止 ≤ 0.45 × (目标率/2),抗混叠硬性要求
+  conservative_max_ae_pct: 0.5  # UNCERTAIN/回退保守路径的 MaxAE 收紧上限(%量程)
+  conservative_noise_k: 1.0   # 回退路径误差地板 = max(上值, k·σ̂)(rules-v2:
+                              # 0.5%量程低于噪声底时 SDT 只能保全点,回退失去意义)
+  spec:
+    mode: auto                # fixed_cr | error_bounded | auto(默认率失真扫描+拐点)
+    target_points: null       # fixed_cr 模式必填
+    max_ae_limit_pct: 1.0     # error_bounded 模式上限(%量程;亦可用 max_ae_limit_abs)
+    cr_grid: [2, 4, 8, 16, 32, 64, 128, 256]  # auto 模式扫描档位
+
+evaluate:
+  peak_prominence_pct: 2.0    # 极值检测 prominence = pct% × range
+  extrema_tol_pct: 2.0        # 极值命中幅值容差 δ_e = pct% × range
+  trend_deadzone_pct: 0.001   # 趋势一致率净变化死区(pct% × range)
+  # —— 噪声地板(rules-v2,仅对 NOISY_SLOW/UNCERTAIN 生效;σ̂=MAD(diff)/√2)——
+  # 双星实测标定:TIANTA001 类参数 σ̂≈3.7-6.7% 量程,1% 量程 MaxAE 上限低于
+  # 噪声底 → 全档必败 → 全量保守回退(CR≈1.1×)。地板依据:N 点白噪声 2×
+  # 抽取的逐点重建 MaxAE 期望 ≈ √(2lnN)·√1.5·σ̂(N~1e4 时≈5σ̂),取 6 覆盖
+  # 信号曲率;真实削峰(实测 11.5σ̂)仍被拦截。
+  noise_floor_k_ae: 6.0       # MaxAE 硬限地板 = max(max_ae_pct%×range, k·σ̂)
+  extrema_noise_k: 3.0        # prominence/δ_e 地板 = max(pct%×range, k·σ̂);
+                              # 3σ 显著性:低于噪声带的逐点翻号抖动不计极值
+  hard_limits:                # 硬约束:越限自动回退保守模式(§2 ⑥)
+    max_ae_pct: 1.0
+    extrema_retention_min: 0.9
+    trend_consistency_min: 0.9
+
+report:
+  out_dir: out                # 输出根目录:out/<param_id>/{series.parquet,meta.json,report.json,...}
+  write_png: true             # 率失真曲线 PNG(matplotlib Agg)

@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>航天遥测降采样预处理 · 双星实测报告</title>
+<style>
+:root{
+  --bg:#f4f6f9; --card:#ffffff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb;
+  --accent:#2f6fed; --ok:#16a34a; --bad:#dc2626; --warn:#d97706;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.topbar{position:sticky;top:0;z-index:50;background:#fff;border-bottom:1px solid var(--line);
+  padding:10px 22px;display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+  box-shadow:0 1px 6px rgba(0,0,0,.05)}
+.topbar h1{font-size:17px;margin:0;font-weight:650}
+.topbar .meta{color:var(--muted);font-size:12.5px}
+.topbar .meta b{color:var(--ink);font-weight:600}
+.nav{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.nav a{padding:4px 10px;border-radius:14px;font-size:13px;background:#eef2f9;color:#334}
+.nav a:hover{background:#e2e9f5;text-decoration:none}
+.wrap{max-width:1420px;margin:0 auto;padding:18px 22px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:14px 16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(16,24,40,.04)}
+.card h2{margin:0 0 4px;font-size:15.5px;font-weight:650}
+.card .sub{color:var(--muted);font-size:12.5px;margin-bottom:8px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.kpi .v{font-size:24px;font-weight:700;letter-spacing:.3px}
+.kpi .k{color:var(--muted);font-size:12.5px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:980px){.grid2{grid-template-columns:1fr}}
+.echart{width:100%}
+.badge{display:inline-block;padding:1px 9px;border-radius:11px;font-size:12px;
+  font-weight:600;color:#fff;vertical-align:1px}
+.chip{display:inline-block;background:#f1f4f9;border:1px solid var(--line);border-radius:6px;
+  padding:2px 9px;font-size:12.5px;margin:2px 4px 2px 0;white-space:nowrap}
+.chip b{font-weight:650}
+.chip.ok{background:#eaf7ee;border-color:#bfe6cb;color:#12662f}
+.chip.bad{background:#fdeeee;border-color:#f5c6c6;color:#9c2020}
+.shead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px}
+.shead .pid{font-size:16px;font-weight:700}
+.shead .sat{color:var(--muted);font-size:13px}
+.warnbox{background:#fdeeee;border:1px solid #f5c6c6;color:#9c2020;border-radius:8px;
+  padding:6px 12px;font-size:13px;margin:6px 0}
+.errbox{background:#fdeeee;border:1px solid #f5c6c6;color:#9c2020;border-radius:8px;
+  padding:10px 14px;margin-bottom:16px}
+table.tbl{border-collapse:collapse;width:100%;font-size:12.8px}
+table.tbl th,table.tbl td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:right;white-space:nowrap}
+table.tbl th:first-child,table.tbl td:first-child,table.tbl th.l,table.tbl td.l{text-align:left}
+table.tbl th{cursor:pointer;user-select:none;color:#374151;background:#f8fafc;position:sticky;top:0;z-index:2}
+table.tbl th:hover{background:#eef2f7}
+table.tbl tr:hover td{background:#f7faff}
+.pass-yes{color:var(--ok);font-weight:700}
+.pass-no{color:var(--bad);font-weight:700}
+details.feat{margin:6px 0;font-size:12.8px}
+details.feat summary{cursor:pointer;color:var(--accent);font-weight:600}
+details.feat table{border-collapse:collapse;margin-top:6px}
+details.feat td{border:1px solid var(--line);padding:2px 10px;min-width:110px}
+.sec-title{font-size:18px;font-weight:700;margin:26px 0 12px;padding-left:10px;
+  border-left:4px solid var(--accent)}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:18px 0 30px}
+.toc{columns:2;column-gap:30px;font-size:13px}
+@media(max-width:800px){.toc{columns:1}}
+.toc a{display:block;padding:1px 0}
+.legend-note{color:var(--muted);font-size:12px;margin:2px 0 4px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>🛰️ 航天遥测降采样预处理 · 双星实测报告</h1>
+  <span class="meta" id="topmeta"></span>
+  <nav class="nav" id="nav"></nav>
+</div>
+<div class="wrap">
+  <div id="overview">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid2">
+      <div class="card"><h2>类型判别分布</h2><div class="sub">TypeVerdict(规则引擎,版本见页脚)</div>
+        <div class="echart" id="c-types" style="height:300px"></div></div>
+      <div class="card"><h2>各序列有效压缩比</h2><div class="sub">N_in/N_out(对数轴);颜色=判别类型,点击柱条跳转详情</div>
+        <div class="echart" id="c-cr" style="height:300px"></div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>压缩比 — MaxAE 失真散点</h2><div class="sub">红虚线 = MaxAE 硬上限(1% 量程);点大小 ∝ RMSE;点击跳转</div>
+        <div class="echart" id="c-scatter" style="height:320px"></div></div>
+      <div class="card"><h2>数据量消减(按星)</h2><div class="sub">流水线输入 vs 降采样输出总点数</div>
+        <div class="echart" id="c-vol" style="height:320px"></div></div>
+    </div>
+    <div class="card">
+      <h2>汇总表</h2><div class="sub">点击表头排序;点击参数名跳转详情。MaxAE%&gt;1 或 极值率/趋势率 &lt;0.9 即硬约束不过(红)。</div>
+      <div style="overflow:auto;max-height:520px"><table class="tbl" id="tbl"></table></div>
+    </div>
+    <div class="card"><h2>序列目录</h2><div class="toc" id="toc"></div></div>
+  </div>
+
+  <div class="sec-title" id="sec-series">逐序列详情</div>
+  <div id="series"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script><!--ECHARTS_LIB--></script>
+<script>
+const DATA = "__DATA_JSON__";
+</script>
+<script>
+"use strict";
+/* ================= 基础 ================= */
+const R = DATA.results || [];
+const TYPE_INFO = {
+  CONSTANT:{c:"#8a8f98",label:"常值"}, SLOW:{c:"#4f81bd",label:"缓变"},
+  NOISY_SLOW:{c:"#2ea3a3",label:"含噪缓变"}, STEP:{c:"#f28e2b",label:"阶跃"},
+  FAST:{c:"#e15759",label:"速变"}, COMPOSITE:{c:"#b07aa1",label:"复合"},
+  UNCERTAIN:{c:"#c9a100",label:"不确定"},
+};
+const tColor = p => (TYPE_INFO[p]||{c:"#999"}).c;
+const tLabel = p => p + "·" + ((TYPE_INFO[p]||{}).label||"");
+
+function esc(s){return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
+function nfmt(x,d){
+  if(x==null||isNaN(x)||!isFinite(x))return "-";
+  const ax=Math.abs(x);
+  if(ax>=1e6)return (x/1e6).toFixed(2)+"M";
+  if(ax>=1e4)return (x/1e3).toFixed(1)+"k";
+  if(ax>=100)return x.toFixed(1);
+  if(ax>=1)return x.toFixed(d==null?3:d);
+  if(ax===0)return "0";
+  if(ax<1e-4)return x.toExponential(2);
+  return x.toFixed(4);
+}
+const p2 = x => (x==null?"-":(x*100).toFixed(0)+"%");
+function fmtMs(ms){
+  const d=new Date(ms),p=n=>String(n).padStart(2,"0");
+  return p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+" "+p(d.getUTCHours())+":"+p(d.getUTCMinutes());
+}
+function fmtMsFull(ms){
+  const d=new Date(ms),p=n=>String(n).padStart(2,"0");
+  return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+" "+
+    p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds());
+}
+const durFmt = s => s>=86400? (s/86400).toFixed(2)+" 天"
+  : s>=3600? (s/3600).toFixed(1)+" 小时" : s>=60? (s/60).toFixed(1)+" 分钟" : s.toFixed(1)+" 秒";
+function jump(pid){location.hash="#"+pid;}
+
+/* ================= 概览统计 ================= */
+const okR = R.filter(r=>!r.error);
+const MAX_RMSE = Math.max(1e-12, ...okR.map(r=>r.rmse||0));
+document.getElementById("topmeta").innerHTML =
+  "<b>"+esc(DATA.sat_names)+"</b> · "+okR.length+" 条序列 · "+esc(DATA.generated_at)+" · rule "+esc(DATA.rule_version);
+
+const nPass = okR.filter(r=>r.passed).length;
+const totIn = okR.reduce((a,r)=>a+r.n_in,0), totOut = okR.reduce((a,r)=>a+r.n_out,0);
+const typeCount = {};
+okR.forEach(r=>typeCount[r.ptype]=(typeCount[r.ptype]||0)+1);
+const totRun = okR.reduce((a,r)=>a+(r.runtime_s||0),0);
+document.getElementById("kpis").innerHTML = [
+  ["序列总数", okR.length+" 条", DATA.sat_list.map(s=>"<span class='chip'>"+esc(s)+" ×"+okR.filter(r=>r.satellite===s).length+"</span>").join(" ")],
+  ["硬约束通过", nPass+"/"+okR.length, p2(nPass/Math.max(okR.length,1))],
+  ["总点数消减", nfmt(totIn)+" → "+nfmt(totOut), (totIn/Math.max(totOut,1)).toFixed(1)+"× 压缩"],
+  ["判别类型分布", Object.keys(typeCount).length+" 类",
+    Object.entries(typeCount).map(([k,v])=>"<span class='badge' style='background:"+tColor(k)+"'>"+k+"×"+v+"</span>").join(" ")],
+  ["流水线总耗时", totRun.toFixed(0)+" s", "单序列均值 "+(totRun/Math.max(okR.length,1)).toFixed(1)+" s"],
+].map(k=>"<div class='kpi'><div class='v'>"+k[1]+"</div><div class='k'>"+k[0]+"</div><div style='margin-top:2px'>"+k[2]+"</div></div>").join("");
+
+/* ================= 导航 ================= */
+document.getElementById("nav").innerHTML =
+  '<a href="#overview">总览</a> ' +
+  DATA.sat_list.map(s=>'<a href="#sat-'+esc(s)+'">'+esc(s)+'</a>').join(" ") +
+  ' <a href="#sec-series">全部序列</a>';
+
+/* ================= 图表懒加载 ================= */
+const registry = {};
+const inited = {};
+function reg(id, factory){ registry[id]=factory; }
+const io = new IntersectionObserver(es=>{
+  es.forEach(e=>{
+    if(e.isIntersecting && registry[e.target.id] && !inited[e.target.id]){
+      const chart = echarts.init(e.target);
+      inited[e.target.id] = chart;
+      try{ registry[e.target.id](chart); }
+      catch(err){
+        e.target.innerHTML="<div style='color:#dc2626;padding:20px'>图表渲染失败: "+esc(err.message)+"</div>";
+      }
+      io.unobserve(e.target);
+    }
+  });
+},{rootMargin:"280px"});
+function watch(){document.querySelectorAll(".echart").forEach(el=>{if(!inited[el.id])io.observe(el);});}
+window.addEventListener("resize",()=>{Object.values(inited).forEach(c=>{try{c.resize()}catch(_){}})});
+
+/* ================= 总览图表 ================= */
+reg("c-types", c=>{
+  c.setOption({
+    tooltip:{trigger:"item",formatter:"{b}<br>{c} 条({d}%)"},
+    legend:{bottom:0,itemWidth:10,itemHeight:10,textStyle:{fontSize:11}},
+    series:[{type:"pie",radius:["36%","62%"],center:["50%","42%"],
+      itemStyle:{borderColor:"#fff",borderWidth:2},
+      label:{formatter:"{b}\n{c} 条",fontSize:11},
+      data:Object.entries(typeCount).sort((a,b)=>b[1]-a[1])
+        .map(([k,v])=>({name:tLabel(k),value:v,itemStyle:{color:tColor(k)}}))}]
+  });
+});
+
+reg("c-cr", c=>{
+  const rs=[...okR].sort((a,b)=>(a.satellite+a.param).localeCompare(b.satellite+b.param));
+  c.setOption({
+    grid:{left:44,right:14,top:26,bottom:70},
+    tooltip:{trigger:"axis",axisPointer:{type:"shadow"},formatter(ps){
+      const r=rs[ps[0].dataIndex];
+      return "<b>"+esc(r.param_id)+"</b><br>类型 "+tLabel(r.ptype)+" · 算法 "+esc((r.algorithm||{}).name||"-")+
+        "<br>压缩比 "+nfmt(r.effective_cr,1)+"× · N "+nfmt(r.n_in)+"→"+nfmt(r.n_out)+
+        "<br>MaxAE "+nfmt(r.max_ae_pct,3)+"%量程 · 极值率 "+nfmt(r.extrema_retention,2)+
+        "<br><b>点击跳转详情</b>";}},
+    xAxis:{type:"category",data:rs.map(r=>r.param),axisLabel:{rotate:56,fontSize:10.5,interval:0}},
+    yAxis:{type:"log",name:"压缩比(×)",nameTextStyle:{fontSize:11},logBase:2},
+    series:[{type:"bar",barMaxWidth:26,
+      data:rs.map(r=>({value:r.effective_cr,itemStyle:{color:tColor(r.ptype)}})),
+      label:{show:true,position:"top",fontSize:9.5,color:"#666",formatter:p=>nfmt(p.value,1)}}]
+  });
+  c.on("click",p=>{const r=rs[p.dataIndex];if(r)jump(r.param_id);});
+});
+
+reg("c-scatter", c=>{
+  c.setOption({
+    grid:{left:52,right:20,top:30,bottom:42},
+    tooltip:{trigger:"item",formatter(p){
+      const r=p.data.r;
+      return "<b>"+esc(r.param_id)+"</b><br>类型 "+tLabel(r.ptype)+" · "+esc((r.algorithm||{}).name||"")+
+        "<br>压缩比 "+nfmt(r.effective_cr,1)+"× · MaxAE "+nfmt(r.max_ae_pct,3)+"%量程"+
+        "<br>RMSE "+nfmt(r.rmse)+"<br>极值率 "+nfmt(r.extrema_retention,2)+" / 趋势率 "+nfmt(r.trend_consistency,2)+
+        "<br><b>点击跳转</b>";}},
+    xAxis:{type:"log",name:"有效压缩比(×)",nameTextStyle:{fontSize:11},logBase:2,min:1},
+    yAxis:{type:"value",name:"MaxAE(%量程)",nameTextStyle:{fontSize:11}},
+    series:[{type:"scatter",
+      data:okR.map(r=>({value:[r.effective_cr,Math.max(r.max_ae_pct,1e-4)],r,
+        symbolSize:8+26*Math.min(1,(r.rmse||0)/MAX_RMSE)})),
+      itemStyle:{opacity:.85}}],
+  });
+  c.on("click",p=>{const r=p.data&&p.data.r;if(r)jump(r.param_id);});
+});
+
+reg("c-vol", c=>{
+  const sats=DATA.sat_list;
+  c.setOption({
+    grid:{left:60,right:20,top:38,bottom:34},
+    legend:{top:2},
+    tooltip:{trigger:"axis"},
+    xAxis:{type:"category",data:sats},
+    yAxis:{type:"value",name:"点数(万)"},
+    series:[
+      {name:"原始输入",type:"bar",barMaxWidth:56,itemStyle:{color:"#9aa5b1"},
+       label:{show:true,position:"top",fontSize:10,formatter:p=>nfmt(p.value/1e4,1)+"万"},
+       data:sats.map(s=>okR.filter(r=>r.satellite===s).reduce((a,r)=>a+r.n_in,0))},
+      {name:"降采样输出",type:"bar",barMaxWidth:56,itemStyle:{color:"#e8710a"},
+       label:{show:true,position:"top",fontSize:10,formatter:p=>nfmt(p.value/1e4,2)+"万"},
+       data:sats.map(s=>okR.filter(r=>r.satellite===s).reduce((a,r)=>a+r.n_out,0))},
+    ]
+  });
+});
+
+/* ================= 汇总表 ================= */
+function modeShort(r){
+  const d=r.decision||{},m=d.mode||"";
+  if(m==="knee")return "knee@CR"+d.selected_cr;
+  if(m==="conservative_fallback")return "回退保守SDT";
+  if(m==="degenerate_max_compression")return "退化最大压缩@CR"+d.selected_cr;
+  if(m==="constant_direct")return "常值直出";
+  return m||"-";
+}
+function cell(v,ok){return "<span class='"+(ok?"":"pass-no")+"'>"+nfmt(v,2)+"</span>";}
+const COLS=[
+  ["参数",r=>r.param,r=>"<a href='#"+esc(r.param_id)+"'>"+esc(r.param)+"</a>","l",null],
+  ["星",r=>r.satellite,null,"l",null],
+  ["类型",r=>r.ptype,r=>"<span class='badge' style='background:"+tColor(r.ptype)+"'>"+r.ptype+"</span> "+p2(r.confidence),"l",null],
+  ["算法",r=>(r.algorithm||{}).name||"",r=>esc((r.algorithm||{}).name||"-"),"l",null],
+  ["auto决策",r=>modeShort(r),null,"l",null],
+  ["N_in",r=>r.n_in,null,null,null],
+  ["N_out",r=>r.n_out,null,null,null],
+  ["压缩比(×)",r=>r.effective_cr,null,null,null],
+  ["RMSE",r=>r.rmse,null,null,null],
+  ["MaxAE%",r=>r.max_ae_pct,null,null,v=>cell(v,v<=1.0)],
+  ["极值率",r=>r.extrema_retention,null,null,v=>cell(v,v>=0.9)],
+  ["趋势率",r=>r.trend_consistency,null,null,v=>cell(v,v>=0.9)],
+  ["通过",r=>r.passed?1:0,r=>r.passed?"<span class='pass-yes'>✓</span>":"<span class='pass-no'>✗</span>",null,null],
+  ["阶跃",r=>((r.counts||{}).steps_detected)||0,null,null,null],
+  ["野值",r=>((r.counts||{}).outliers_removed)||0,null,null,null],
+  ["GAP",r=>r.n_gaps||0,null,null,null],
+  ["耗时s",r=>r.runtime_s,null,null,null],
+];
+function buildTbl(sortIdx,desc){
+  const tb=document.getElementById("tbl");
+  const rows=[...okR].sort((a,b)=>{
+    const va=COLS[sortIdx][1](a),vb=COLS[sortIdx][1](b);
+    const c=(typeof va==="number"?va-vb:String(va).localeCompare(String(vb),"zh"));
+    return desc?-c:c;});
+  let h="<thead><tr>"+COLS.map((cl,i)=>
+    "<th class='"+(cl[3]||"")+"' data-i='"+i+"'>"+cl[0]+(i===sortIdx?(desc?" ▼":" ▲"):"")+"</th>").join("")+"</tr></thead><tbody>";
+  for(const r of rows){
+    h+="<tr>"+COLS.map(cl=>{
+      const v=cl[1](r);
+      let body;
+      if(cl[4])body=cl[4](v);
+      else if(cl[2])body=cl[2](r);
+      else body=(typeof v==="number")?nfmt(v):esc(v);
+      return "<td class='"+(cl[3]||"")+"'>"+body+"</td>";}).join("")+"</tr>";
+  }
+  tb.innerHTML=h+"</tbody>";
+  tb.querySelectorAll("th").forEach(th=>th.onclick=()=>{
+    const i=+th.dataset.i;
+    buildTbl(i,i===sortIdx?!desc:false);});
+}
+buildTbl(0,false);
+
+/* ================= 序列目录 ================= */
+document.getElementById("toc").innerHTML = DATA.sat_list.map(s=>{
+  const rs=okR.filter(r=>r.satellite===s);
+  return "<b style='display:block'>"+esc(s)+"</b>"+rs.map(r=>
+    "<a href='#"+esc(r.param_id)+"'>"+esc(r.param)+
+    " <span style='color:"+tColor(r.ptype)+"'>"+r.ptype+"</span> "+nfmt(r.effective_cr,1)+"×</a>").join("");
+}).join("");
+
+/* ================= 逐序列卡片 ================= */
+const FEAT_LABEL={
+  n_samples:"样本数",duration_s:"时长(s)",y_range:"量程",constant_ratio:"常值比",
+  rel_derivative:"相对导数",detrend_var_ratio:"去趋势方差比",slope_flip_rate:"斜率变号率",
+  hf_ratio:"高频能量比",spectral_flatness:"谱平坦度",residual_hf_ratio:"残差高频比",
+  step_density:"阶跃密度(次/分)",
+};
+function featTable(f){
+  const keys=Object.keys(FEAT_LABEL).filter(k=>f[k]!=null);
+  let h="<table>";
+  for(let i=0;i<keys.length;i+=2){
+    h+="<tr><td style='background:#f8fafc'>"+FEAT_LABEL[keys[i]]+"</td><td>"+nfmt(f[keys[i]])+"</td>";
+    h+=(keys[i+1]!==undefined
+      ?"<td style='background:#f8fafc'>"+FEAT_LABEL[keys[i+1]]+"</td><td>"+nfmt(f[keys[i+1]])+"</td>"
+      :"<td></td><td></td>");
+    h+="</tr>";
+  }
+  return h+"</table>";
+}
+
+const seriesBox=document.getElementById("series");
+let html="";
+for(const s of DATA.sat_list){
+  html+="<div class='sec-title' id='sat-"+esc(s)+"'>"+esc(s)+"</div>";
+  for(const r of R.filter(x=>x.satellite===s)){
+    if(r.error){
+      html+="<div class='errbox'><b>"+esc(r.param_id)+"</b> 流水线失败:"+esc(r.error)+"</div>";
+      continue;
+    }
+    const warns=(r.warnings||[]);
+    const hasRD=r.rd_points&&r.rd_points.length>=2;
+    html+="<div class='card' id='"+esc(r.param_id)+"'>"+
+      "<div class='shead'><span class='pid'>"+esc(r.param)+"</span><span class='sat'>"+esc(r.satellite)+"</span>"+
+      "<span class='badge' style='background:"+tColor(r.ptype)+"'>"+tLabel(r.ptype)+"</span>"+
+      "<span class='chip'>置信度 <b>"+p2(r.confidence)+"</b></span>"+
+      "<span class='chip'>规则 <b>"+esc(r.hit_rule)+"</b></span>"+
+      "<span class='chip'>算法 <b>"+esc((r.algorithm||{}).name||"-")+"</b></span>"+
+      (r.passed?"<span class='chip ok'>硬约束 ✓</span>":"<span class='chip bad'>硬约束 ✗</span>")+
+      "</div>"+
+      "<div>"+
+      "<span class='chip'>样本 <b>"+nfmt(r.n_in)+"</b> · "+durFmt(r.duration_s)+" · f̂="+(r.f_hat||0).toExponential(1)+" Hz</span>"+
+      ((r.noise_sigma||0)>0?"<span class='chip warn'>σ̂="+nfmt(r.noise_sigma)+"(噪声感知评分 rules-v2)</span>":"")+
+      "<span class='chip'>输出 <b>"+nfmt(r.n_out)+"</b> 点</span>"+
+      "<span class='chip'>压缩比 <b>"+nfmt(r.effective_cr,1)+"×</b></span>"+
+      "<span class='chip'>RMSE <b>"+nfmt(r.rmse)+"</b></span>"+
+      "<span class='chip'>MaxAE <b>"+nfmt(r.max_ae)+"</b>("+nfmt(r.max_ae_pct,3)+"%量程)</span>"+
+      "<span class='chip"+(r.extrema_retention>=0.9?" ok":" bad")+"'>极值率 <b>"+nfmt(r.extrema_retention,3)+"</b></span>"+
+      "<span class='chip"+(r.trend_consistency>=0.9?" ok":" bad")+"'>趋势率 <b>"+nfmt(r.trend_consistency,3)+"</b></span>"+
+      "<span class='chip'>野值剔除 <b>"+((r.counts||{}).outliers_removed||0)+"</b></span>"+
+      "<span class='chip'>阶跃事件 <b>"+((r.counts||{}).steps_detected||0)+"</b></span>"+
+      "<span class='chip'>GAP <b>"+(r.n_gaps||0)+"</b></span>"+
+      "<span class='chip'>耗时 <b>"+nfmt(r.runtime_s,1)+"</b> s</span>"+
+      "</div>"+
+      ((warns.length||!r.passed)
+        ?"<div class='warnbox'>⚠ "+(warns.map(esc).join(";")||(r.passed?"":"硬约束未通过"))+"</div>":"")+
+      "<details class='feat'><summary>判别特征快照(10 维,随 meta 落盘)</summary>"+featTable(r.features||{})+"</details>"+
+      "<div class='echart' id='m-"+esc(r.param_id)+"' style='height:400px'></div>"+
+      "<div class='legend-note'>灰线=原始序列("+(r.orig_capped?"显示预览 ≤3000 点(LTTB)":"全量")+")· 橙线=降采样保留点/分段线性重建("+(r.down_capped?"显示预览 ≤6000 点":"实际输出")+")· 红色区域=丢帧空洞 · 上下两图缩放联动</div>"+
+      "<div class='echart' id='e-"+esc(r.param_id)+"' style='height:140px'></div>"+
+      "<div class='legend-note'>|原始 − 重建| 绝对误差(按桶取最大,保尖峰)</div>"+
+      (hasRD
+        ?"<div class='echart' id='r-"+esc(r.param_id)+"' style='height:270px'></div>"+
+         "<div class='legend-note'>auto 模式率失真扫描(cr_grid 档位)· 左:误差-压缩比;右:极值保留率/趋势一致率 · 橙虚线=Kneedle 拐点 · 黑点线=选中工作点 · 灰横线=硬约束阈值</div>"
+        :"<div class='legend-note'>(该序列未走 auto 扫描,无率失真曲线)</div>")+
+      "</div>";
+  }
+}
+seriesBox.innerHTML=html;
+
+/* ================= 详情图表工厂 ================= */
+const ttipBase={trigger:"axis",axisPointer:{type:"line"},
+  formatter:ps=>{
+    if(!ps.length)return "";
+    let h=fmtMsFull(ps[0].axisValue)+"<br>";
+    ps.forEach(p=>{
+      const v=Array.isArray(p.value)?p.value[1]:p.value;
+      h+="<span style='display:inline-block;width:9px;height:9px;border-radius:5px;background:"+p.color+"'></span> "
+        +esc(p.seriesName)+": <b>"+nfmt(v)+"</b><br>";});
+    return h;}};
+
+function mainChartOption(r){
+  const [ot,oy]=r.orig_preview,[dt,dy]=r.down_preview;
+  return {
+    grid:{left:64,right:18,top:30,bottom:58},
+    legend:{top:2,right:8,itemWidth:16},
+    tooltip:ttipBase,
+    xAxis:{type:"value",name:"时间(墙钟)",nameTextStyle:{fontSize:10.5},
+      axisLabel:{formatter:v=>fmtMs(v)},scale:true},
+    yAxis:{type:"value",scale:true,axisLabel:{formatter:v=>nfmt(v)}},
+    dataZoom:[{type:"inside"},{type:"slider",height:18,bottom:8,labelFormatter:v=>fmtMs(v)}],
+    series:[
+      {name:"原始("+(r.orig_capped?"预览"+ot.length:"全量")+")",type:"line",showSymbol:false,
+       lineStyle:{width:1,color:"#9aa5b1",opacity:.85},itemStyle:{color:"#9aa5b1"},
+       sampling:"lttb",large:true,z:1,
+       data:ot.length?ot.map((x,i)=>[x,oy[i]]):[],
+       markArea:{silent:true,itemStyle:{color:"rgba(220,38,38,.07)"},
+         data:(r.gaps_ms||[]).map(g=>[{xAxis:g[0],itemStyle:null},{xAxis:g[1]}])}},
+      {name:"降采样输出("+nfmt(dt.length)+"点)",type:"line",
+       showSymbol:dt.length<=400,symbol:"circle",symbolSize:3.5,
+       lineStyle:{width:1.4,color:"#e8710a"},itemStyle:{color:"#e8710a"},z:3,
+       emphasis:{focus:"series"},
+       data:dt.length?dt.map((x,i)=>[x,dy[i]]):[]},
+    ]};
+}
+function errChartOption(r){
+  const [et,ev]=r.err_preview;
+  return {
+    grid:{left:64,right:18,top:12,bottom:22},
+    tooltip:ttipBase,
+    xAxis:{type:"value",axisLabel:{formatter:v=>fmtMs(v),fontSize:10},scale:true},
+    yAxis:{type:"value",scale:true,axisLabel:{formatter:v=>nfmt(v),fontSize:10}},
+    dataZoom:[{type:"inside"}],
+    series:[{name:"|原始−重建|",type:"line",showSymbol:false,
+      lineStyle:{width:1,color:"#c0504d"},areaStyle:{color:"rgba(192,80,77,.18)"},
+      data:et.length?et.map((x,i)=>[x,ev[i]]):[]}]};
+}
+function rdChartOption(r){
+  const ps=r.rd_points,d=r.decision||{};
+  const cats=ps.map(p=>String(p.cr));
+  const vLine=(cr,color,type)=>({silent:true,symbol:"none",
+    lineStyle:{color,width:1.4,type},label:{show:false},data:[{xAxis:String(cr)}]});
+  const hLine=(y,color,type,lab)=>({silent:true,symbol:"none",
+    lineStyle:{color,width:1,type},label:{formatter:lab,fontSize:9,position:"insideEndTop"},data:[{yAxis:y}]});
+  const kneeML=d.knee_cr?vLine(d.knee_cr,"#e8710a","dashed"):null;
+  const selML=d.selected_cr&&d.selected_cr!==d.knee_cr?vLine(d.selected_cr,"#222","dotted"):null;
+  const mk=(...mls)=>({silent:true,symbol:"none",lineStyle:{color:"#888"},data:[]
+    .concat(...mls.filter(Boolean).map(m=>m.data.map(x=>Object.assign({lineStyle:m.lineStyle,label:m.label},x))))});
+  return {
+    grid:[{left:56,right:"53.5%",top:34,bottom:32},{left:"56.5%",right:18,top:34,bottom:32}],
+    legend:{top:2,left:6,itemWidth:14,textStyle:{fontSize:11}},
+    tooltip:{trigger:"axis"},
+    xAxis:[{type:"category",gridIndex:0,data:cats,name:"压缩比",nameLocation:"middle",nameGap:24},
+           {type:"category",gridIndex:1,data:cats}],
+    yAxis:[{type:"value",gridIndex:0,name:"误差",scale:true,axisLabel:{formatter:v=>nfmt(v),fontSize:10}},
+           {type:"value",gridIndex:1,min:0,max:1,name:"形状指标",axisLabel:{formatter:v=>v.toFixed(1),fontSize:10}}],
+    series:[
+      {name:"MaxAE(%量程)",type:"line",xAxisIndex:0,yAxisIndex:0,symbol:"circle",symbolSize:5,
+       itemStyle:{color:"#c0504d"},lineStyle:{color:"#c0504d",width:1.4},
+       markLine:mk(hLine(1.0,"#888","dashed","上限1%"),kneeML,selML),
+       data:ps.map(p=>[String(p.cr),+p.max_ae_pct.toFixed(4)])},
+      {name:"RMSE",type:"line",xAxisIndex:0,yAxisIndex:0,symbol:"rect",symbolSize:5,
+       itemStyle:{color:"#4f81bd"},lineStyle:{color:"#4f81bd",width:1.2,type:"dashed"},
+       data:ps.map(p=>[String(p.cr),+p.rmse.toFixed(5)])},
+      {name:"极值保留率",type:"line",xAxisIndex:1,yAxisIndex:1,symbol:"circle",symbolSize:5,
+       itemStyle:{color:"#9bbb59"},lineStyle:{color:"#9bbb59",width:1.4},
+       markLine:mk(hLine(0.9,"#888","dotted","0.9"),kneeML,selML),
+       data:ps.map(p=>[String(p.cr),+p.extrema_retention.toFixed(3)])},
+      {name:"趋势一致率",type:"line",xAxisIndex:1,yAxisIndex:1,symbol:"rect",symbolSize:5,
+       itemStyle:{color:"#8064a2"},lineStyle:{color:"#8064a2",width:1.2,type:"dashed"},
+       data:ps.map(p=>[String(p.cr),+p.trend_consistency.toFixed(3)])},
+    ]};
+}
+
+for(const r of okR){
+  const pid=r.param_id;
+  const pair={};
+  pair["m-"+pid]=null; pair["e-"+pid]=null;
+  const after=(key,c)=>{
+    c.group="zoom-"+pid; pair[key]=c;
+    if(pair["m-"+pid]&&pair["e-"+pid])echarts.connect("zoom-"+pid);
+  };
+  reg("m-"+pid,c=>{c.setOption(mainChartOption(r));after("m-"+pid,c);});
+  reg("e-"+pid,c=>{c.setOption(errChartOption(r));after("e-"+pid,c);});
+  if(r.rd_points&&r.rd_points.length>=2)
+    reg("r-"+pid,c=>{c.setOption(rdChartOption(r));});
+}
+
+document.getElementById("footer").innerHTML=
+  "telemetry_preproc v"+esc(DATA.version)+" · rule "+esc(DATA.rule_version)+
+  " · config sha256 "+esc(String(DATA.config_fingerprint).slice(0,16))+
+  " · 产物: out/realdata/&lt;param_id&gt;/{series.parquet, meta.json, report.json, ratedistortion.csv/png}"+
+  " · 原始数据未删除,算法/阈值升级后可回退重算";
+
+watch();
+</script>
+</body>
+</html>

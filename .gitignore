@@ -1,0 +1,28 @@
+# 真实数据：不入库（体积大且涉密，仅保留在本地）
+data/
+
+# 生成产物（可随时重新生成）
+outputs/
+telemetry_preproc/out/
+profile_out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

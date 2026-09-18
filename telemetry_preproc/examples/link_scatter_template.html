@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TIANTA001 · 建链卫星分组 × 载噪比分析</title>
+<style>
+:root{
+  --bg:#f4f6f9; --card:#ffffff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb;
+  --accent:#2f6fed;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;}
+.topbar{position:sticky;top:0;z-index:50;background:#fff;border-bottom:1px solid var(--line);
+  padding:10px 22px;display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+  box-shadow:0 1px 6px rgba(0,0,0,.05)}
+.topbar h1{font-size:17px;margin:0;font-weight:650}
+.topbar .meta{color:var(--muted);font-size:12.5px}
+.wrap{max-width:1420px;margin:0 auto;padding:18px 22px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:14px 16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(16,24,40,.04)}
+.card h2{margin:0 0 4px;font-size:15.5px;font-weight:650}
+.card .sub{color:var(--muted);font-size:12.5px;margin-bottom:8px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.kpi .v{font-size:23px;font-weight:700;letter-spacing:.3px}
+.kpi .k{color:var(--muted);font-size:12.5px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:980px){.grid2{grid-template-columns:1fr}}
+.echart{width:100%}
+table.tbl{border-collapse:collapse;width:100%;font-size:12.8px}
+table.tbl th,table.tbl td{border-bottom:1px solid var(--line);padding:5px 8px;
+  text-align:right;white-space:nowrap}
+table.tbl th:first-child,table.tbl td:first-child,table.tbl th.l,table.tbl td.l{text-align:left}
+table.tbl th{color:#374151;background:#f8fafc;position:sticky;top:0;z-index:2}
+table.tbl tr:hover td{background:#f7faff}
+.chartbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:6px;font-size:12.5px;color:var(--muted)}
+.chartbar select{padding:2px 6px;border:1px solid var(--line);border-radius:6px;
+  background:#fff;font:12.5px "Segoe UI","Microsoft YaHei",sans-serif;color:var(--ink);max-width:200px}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:18px 0 30px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>🛰️ TIANTA001 · 建链卫星分组 × 载噪比分析</h1>
+  <span class="meta" id="topmeta"></span>
+</div>
+<div class="wrap">
+  <div class="kpis" id="kpis"></div>
+
+  <div class="card">
+    <h2>建链时段载噪比 · 分组散点(按时间)</h2>
+    <div class="sub">RZCG2 各建链弧段内,逐点取 RZCK6 对应时刻(最近时间戳,|Δt|≤130 s)的载噪比;
+      颜色 = 对端卫星分组。灰色"未建链"背景默认隐藏(点图例可开);
+      点图例或用右侧下拉可只看指定对端;滚轮缩放 / 拖拽平移 / 底部滑块选区间。</div>
+    <div class="chartbar">
+      <label>只看对端:<select id="peer-filter"><option value="">全部对端</option></select></label>
+    </div>
+    <div class="echart" id="c-scatter" style="height:540px"></div>
+  </div>
+
+  <div class="card">
+    <h2>各对端卫星载噪比分布(分组散点 + 箱线)</h2>
+    <div class="sub">横向抖动散点 = 各组全部匹配样本;箱体 = 四分位,须 = 1.5×IQR 内极值</div>
+    <div class="echart" id="c-box" style="height:400px"></div>
+  </div>
+
+  <div class="card">
+    <h2>分组统计</h2>
+    <div class="sub">匹配率 = 匹配点数 / 建链弧段点数(RZCK6 存在丢帧时 &lt;100%)</div>
+    <div style="overflow:auto;max-height:420px"><table class="tbl" id="tbl-groups"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>建链弧段明细</h2>
+    <div class="sub">按开始时间排序;时长 = 弧段点数 × 2 min;C/N0 统计基于该弧段内匹配到的样本</div>
+    <div style="overflow:auto;max-height:480px"><table class="tbl" id="tbl-segs"></table></div>
+  </div>
+</div>
+<footer id="footer"></footer>
+<script><!--ECHARTS_LIB--></script>
+<script>
+const DATA = "__DATA_JSON__";
+const PALETTE = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4'];
+const GRAY = '#9ca3af';
+const fmtT = (ms, tmpl) => echarts.time.format(ms, tmpl || '{yyyy}-{MM}-{dd} {HH}:{mm}', true);
+const f2 = x => (x == null ? '—' : Number(x).toFixed(2));
+const f1 = x => (x == null ? '—' : Number(x).toFixed(1));
+
+// —— 顶栏与 KPI ——
+document.getElementById('topmeta').innerHTML =
+  `RZCG2(建链) × RZCK6(载噪比) · ${DATA.range} · 生成于 ${DATA.generated_at}`;
+document.getElementById('kpis').innerHTML = [
+  ['对端卫星', DATA.n_peers],
+  ['建链弧段', DATA.n_segments],
+  ['建链总时长', Math.round(DATA.total_link_min) + ' min'],
+  ['匹配点数 / 匹配率', `${DATA.n_matched} / ${(DATA.match_rate * 100).toFixed(1)}%`],
+  ['建链期 C/N0 均值', f2(DATA.cn0_all_mean) + ' dB-Hz'],
+  ['RZCK6 总点数', DATA.n_cn0],
+].map(([k, v]) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+
+const ptip = p =>
+  `${fmtT(p.value[0])}<br/>${p.marker}${p.seriesName}　C/N0 = <b>${f2(p.value[1])}</b> dB-Hz`;
+
+// —— 主图:分组散点(时间轴)。背景默认隐藏,均值线不再画(见热力图/箱线/统计表)——
+const BG_NAME = '未建链';
+const seriesNames = [BG_NAME, ...DATA.groups.map(g => g.name)];
+const series = [];
+if (DATA.background.length) {
+  series.push({name: BG_NAME, type: 'scatter', data: DATA.background,
+    symbolSize: 2.5, itemStyle: {color: GRAY, opacity: .22}, large: true});
+}
+DATA.groups.forEach((g, i) => {
+  series.push({
+    name: g.name, type: 'scatter', data: g.points, symbolSize: 4.5,
+    itemStyle: {color: PALETTE[i % PALETTE.length], opacity: .8}
+  });
+});
+const chScatter = echarts.init(document.getElementById('c-scatter'));
+chScatter.setOption({
+  tooltip: {trigger: 'item', formatter: ptip},
+  legend: {top: 0, type: 'scroll', selected: {[BG_NAME]: false}},
+  grid: {left: 64, right: 24, top: 34, bottom: 78},
+  xAxis: {type: 'time', axisLabel: {formatter: v => fmtT(v, '{MM}-{dd}')}},
+  yAxis: {type: 'value', name: 'C/N0 (dB-Hz)', min: DATA.ymin, max: DATA.ymax,
+    splitLine: {lineStyle: {color: '#eef1f5'}}},
+  dataZoom: [
+    {type: 'inside'},
+    {type: 'slider', height: 18, bottom: 10,
+     labelFormatter: v => fmtT(v, '{MM}-{dd}')}
+  ],
+  series: series
+});
+
+// 对端筛选下拉:只看单颗 / 全部
+const sel = document.getElementById('peer-filter');
+DATA.groups.forEach(g => sel.add(new Option(g.name, g.name)));
+sel.addEventListener('change', () => {
+  const only = sel.value;
+  const selected = {};
+  seriesNames.forEach(n => selected[n] = only ? n === only : n !== BG_NAME);
+  chScatter.setOption({legend: {selected}});
+});
+
+// —— 各组分布:抖动散点 + 箱线图 ——
+const boxSeries = [{
+  name: '箱线', type: 'boxplot', data: DATA.box.boxes,
+  itemStyle: {color: 'rgba(47,111,237,.10)', borderColor: '#2f6fed'},
+  tooltip: {formatter: p => {
+    const v = DATA.box.boxes[p.dataIndex];   // [下须, Q1, 中位, Q3, 上须]
+    return `${DATA.box.cats[p.dataIndex]}<br/>上须 ${f2(v[4])}　Q3 ${f2(v[3])}` +
+      `<br/>中位 <b>${f2(v[2])}</b><br/>Q1 ${f2(v[1])}　下须 ${f2(v[0])}`;}}
+}];
+DATA.box.strip.forEach((pts, i) => {
+  if (!pts.length) return;
+  boxSeries.push({name: DATA.box.cats[i], type: 'scatter', data: pts, symbolSize: 4,
+    itemStyle: {color: PALETTE[i % PALETTE.length], opacity: .45},
+    tooltip: {formatter: p => `${p.seriesName}　C/N0 = <b>${f2(p.value[1])}</b> dB-Hz`}});
+});
+const chBox = echarts.init(document.getElementById('c-box'));
+chBox.setOption({
+  tooltip: {trigger: 'item'},
+  grid: {left: 64, right: 20, top: 30, bottom: 40},
+  xAxis: {type: 'category', data: DATA.box.cats,
+    axisLabel: {interval: 0, fontSize: 10.5}},
+  yAxis: {type: 'value', name: 'C/N0 (dB-Hz)', scale: true,
+    splitLine: {lineStyle: {color: '#eef1f5'}}},
+  series: boxSeries
+});
+
+// —— 分组统计表 ——
+document.getElementById('tbl-groups').innerHTML =
+  '<tr><th class="l">对端卫星</th><th>弧段数</th><th>总时长 (min)</th><th>建链点数</th>' +
+  '<th>匹配点数</th><th>匹配率</th><th>均值</th><th>σ</th><th>最小</th><th>Q1</th>' +
+  '<th>中位</th><th>Q3</th><th>最大</th></tr>' +
+  DATA.groups.map((g, i) =>
+    `<tr><td class="l"><span style="color:${PALETTE[i % PALETTE.length]}">●</span> ${g.name}</td>` +
+    `<td>${g.n_segments}</td><td>${g.duration_min}</td><td>${g.n_link_pts}</td>` +
+    `<td>${g.n_matched}</td><td>${(g.n_matched / g.n_link_pts * 100).toFixed(1)}%</td>` +
+    `<td>${f2(g.mean)}</td><td>${f2(g.std)}</td><td>${f2(g.min)}</td><td>${f2(g.q1)}</td>` +
+    `<td>${f2(g.med)}</td><td>${f2(g.q3)}</td><td>${f2(g.max)}</td></tr>`).join('');
+
+// —— 弧段明细表(统计值由 Python 预计算,存于 segments)——
+document.getElementById('tbl-segs').innerHTML =
+  '<tr><th class="l">#</th><th class="l">对端</th><th class="l">开始</th><th class="l">结束</th>' +
+  '<th>时长 (min)</th><th>弧段点数</th><th>匹配点数</th><th>C/N0 均值</th><th>最小</th><th>最大</th></tr>' +
+  DATA.segments.map((s, i) =>
+    `<tr><td class="l">${i + 1}</td><td class="l">${s.name}</td>` +
+    `<td class="l">${fmtT(s.t0_ms)}</td><td class="l">${fmtT(s.t1_ms)}</td>` +
+    `<td>${s.dur_min}</td><td>${s.n}</td><td>${s.n_matched}</td>` +
+    `<td>${f2(s.mean)}</td><td>${f2(s.min)}</td><td>${f2(s.max)}</td></tr>`).join('');
+
+document.getElementById('footer').innerHTML =
+  `telemetry_preproc v${DATA.version} · 匹配容差 ${DATA.tol_s} s · 数据源 ${DATA.source}`;
+
+window.addEventListener('resize', () => [chScatter, chBox].forEach(c => c.resize()));
+</script>
+</body>
+</html>
